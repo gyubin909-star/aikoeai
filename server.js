@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -181,19 +181,72 @@ async function uploadAsset({ name, contentType, buffer }) {
 const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json" };
 
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+
+// ---------- Login sesi (cookie) ----------
+// Masalah yang diperbaiki v10: kunci Basic Auth bawaan browser mudah "nyangkut"
+// — sekali kredensial salah tersimpan, browser mengirimnya diam-diam dan API
+// selalu 401 tanpa pernah memunculkan popup lagi. Sekarang login memakai form
+// di halaman + cookie sesi, jadi password salah langsung terlihat pesannya dan
+// bisa dicoba ulang. Basic Auth tetap diterima untuk klien API/curl.
+// Token sesi stateless (HMAC pakai SITE_PASSWORD sebagai kunci) supaya tetap
+// valid di semua instance serverless Vercel — tidak ada state di memori.
+function parseCookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function makeSessionToken() {
+  const exp = Date.now() + 7 * 24 * 3600 * 1000; // 7 hari
+  const sig = createHmac("sha256", SITE_PASSWORD).update(`aikoe-session:${exp}`).digest("hex");
+  return `${exp}.${sig}`;
+}
+function validSessionToken(tok) {
+  try {
+    const [expStr, sig] = String(tok || "").split(".");
+    const exp = Number(expStr);
+    if (!exp || exp <= Date.now() || !sig) return false;
+    const expect = createHmac("sha256", SITE_PASSWORD).update(`aikoe-session:${exp}`).digest("hex");
+    if (sig.length !== expect.length) return false;
+    return timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
+  } catch { return false; }
+}
+function isAuthenticated(req) {
+  if (!SITE_PASSWORD) return true;
+  const auth = req.headers.authorization || "";
+  if (auth.startsWith("Basic ") && Buffer.from(auth.slice(6), "base64").toString() === `aikoe:${SITE_PASSWORD}`) return true;
+  return validSessionToken(parseCookies(req).aikoe_session);
+}
+
 const handler = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
   try {
-    // Kunci password opsional (Basic Auth) — aktif hanya bila SITE_PASSWORD diisi.
-    // Penting untuk versi online: tanpa ini, siapa pun yang tahu URL bisa generate memakai kuota akunmu.
-    if (SITE_PASSWORD) {
-      const auth = req.headers.authorization || "";
-      const ok = auth.startsWith("Basic ") && Buffer.from(auth.slice(6), "base64").toString() === `aikoe:${SITE_PASSWORD}`;
-      if (!ok) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="AIKOE"', "Content-Type": "text/plain; charset=utf-8" }); return res.end("Perlu login. Username: aikoe, password: sesuai SITE_PASSWORD."); }
-    }
+    const authed = isAuthenticated(req);
     if (p === "/api/config") {
-      return sendJson(res, 200, { configured, workspace_configured: Boolean(ENV_WORKSPACE), base: FLORA_BASE });
+      // Sengaja publik: frontend butuh tahu locked/authenticated SEBELUM login,
+      // tanpa memicu popup Basic Auth browser.
+      return sendJson(res, 200, { configured, workspace_configured: Boolean(ENV_WORKSPACE), locked: Boolean(SITE_PASSWORD), authenticated: authed, base: FLORA_BASE });
+    }
+    if (p === "/api/login" && req.method === "POST") {
+      if (!SITE_PASSWORD) return sendJson(res, 200, { ok: true, authenticated: true });
+      const body = await readJson(req).catch(() => ({}));
+      if (body.username === "aikoe" && body.password === SITE_PASSWORD) {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Set-Cookie": `aikoe_session=${makeSessionToken()}; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800` });
+        return res.end(JSON.stringify({ ok: true }));
+      }
+      return sendJson(res, 401, { error: { message: "Username atau password salah.", code: "auth_failed" } });
+    }
+    if (p === "/api/logout" && req.method === "POST") {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Set-Cookie": "aikoe_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0" });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+    // Semua /api/* lain butuh login bila password aktif. Halaman & aset statis
+    // tetap publik supaya form login di halaman bisa tampil tanpa popup browser.
+    if (SITE_PASSWORD && !authed && p.startsWith("/api/")) {
+      return sendJson(res, 401, { error: { message: "Perlu login. Username: aikoe, password: sesuai SITE_PASSWORD.", code: "auth_required" } });
     }
     if (p === "/api/health") {
       // Diagnosa bertahap: langkah mana persisnya yang gagal (auth / workspace / models / project).
@@ -310,10 +363,13 @@ const handler = async (req, res) => {
   }
 };
 
-// Mode Vercel (serverless): handler diekspor, tidak listen port.
-// Mode lokal: jalan sebagai server biasa.
+// Dua mode jalan:
+// - Dijalankan langsung (lokal / Vercel mode server): file ini program utama -> listen port.
+// - Diimpor sebagai function (serverless): handler diekspor, tidak listen.
 export default handler;
-if (!process.env.VERCEL) {
+import { pathToFileURL } from "node:url";
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
   createServer(handler).listen(PORT, () => {
     console.log(`AIKOE jalan di http://localhost:${PORT}`);
     console.log(configured ? "API key: terbaca ✔" : "API key: BELUM diisi — salin .env.example menjadi .env lalu isi key-nya.");

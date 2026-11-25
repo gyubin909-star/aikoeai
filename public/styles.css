@@ -48,7 +48,7 @@ code{background:rgba(37,99,235,.1);padding:1px 6px;border-radius:6px}
 
 .field{margin-bottom:18px}
 .field label{font-weight:600;font-size:.92rem;display:block;margin-bottom:8px}
-textarea,input[type="search"],select,input[type="text"],input[type="number"]{
+textarea,input[type="search"],select,input[type="text"],input[type="number"],input[type="password"]{
   width:100%;border:1px solid rgba(37,99,235,.25);border-radius:12px;background:rgba(255,255,255,.85);
   padding:10px 12px;font:inherit;color:var(--ink);outline:none;
 }

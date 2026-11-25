@@ -26,8 +26,19 @@
 </header>
 
 <div id="configBanner" class="banner glass hidden">
-  <strong>Mode Pratinjau.</strong> Server belum terhubung (API key belum diisi di file <code>.env</code>).
-  Daftar model di bawah ini contoh tampilan — isi key dulu untuk memuat <em>semua model asli</em> dari akunmu dan mengaktifkan tombol Generate.
+  <strong>Belum terhubung.</strong> Periksa koneksi server, lalu refresh halaman ini.
+</div>
+
+<div id="loginCard" class="banner glass hidden">
+  <strong>🔒 AIKOE terkunci.</strong>
+  <p class="hint" style="margin:6px 0 10px">Masukkan username &amp; password untuk membuka semua model. Username selalu <code>aikoe</code>.</p>
+  <form id="loginForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <input id="loginUser" type="text" value="aikoe" autocomplete="username" style="max-width:140px">
+    <input id="loginPass" type="password" placeholder="Password (SITE_PASSWORD)" autocomplete="current-password" style="flex:1;min-width:180px">
+    <button class="btn btn-primary" type="submit">Masuk</button>
+  </form>
+  <p id="loginError" class="warn hidden" style="margin:8px 0 0"></p>
+  <p class="hint" style="margin:8px 0 0">Password = nilai <code>SITE_PASSWORD</code> di Vercel → Settings → Environment Variables. Kalau baru diubah di sana, wajib <strong>Redeploy</strong> dulu (tab Deployments) supaya password baru aktif.</p>
 </div>
 
 <main class="layout">

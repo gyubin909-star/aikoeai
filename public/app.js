@@ -23,6 +23,8 @@ const els = {
   lbDl: $("#lbDownload"), toast: $("#toast"),
   capFilters: $("#capFilters"), dedupeNote: $("#dedupeNote"),
   countImage: $("#countImage"), countVideo: $("#countVideo"), countText: $("#countText"),
+  loginCard: $("#loginCard"), loginForm: $("#loginForm"), loginUser: $("#loginUser"),
+  loginPass: $("#loginPass"), loginError: $("#loginError"),
 };
 
 /* Batas referensi mengikuti MODEL, bukan angka tetap:
@@ -110,7 +112,7 @@ function setStatus(msg, isErr = false) { els.status.textContent = msg; els.statu
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(data?.error?.message || `Request gagal (${res.status})`);
+  if (!res.ok) { const e = new Error(data?.error?.message || `Request gagal (${res.status})`); e.status = res.status; throw e; }
   return data;
 }
 function dedupeModels(list) {
@@ -577,6 +579,19 @@ els.lb.onclick = (e) => { if (e.target === els.lb) closeLightbox(); };
 $("#lbUseRef").onclick = () => { if (state.lbItem) { const it = state.lbItem; closeLightbox(); useAsRef(it); } };
 $("#btnHistory").onclick = () => { els.gallery.scrollIntoView({ behavior: "smooth" }); toast(state.history.length ? `${state.history.length} hasil tersimpan di galeri (browser ini).` : "Belum ada riwayat di browser ini."); };
 
+/* ---------- Login (form di halaman, v10) ---------- */
+els.loginForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  els.loginError.classList.add("hidden");
+  try {
+    await api("/api/login", { method: "POST", body: JSON.stringify({ username: els.loginUser.value.trim(), password: els.loginPass.value }) });
+    location.reload(); // cookie sesi kini tersimpan; init ulang memuat model asli
+  } catch (err) {
+    els.loginError.textContent = "Password salah. Cek SITE_PASSWORD di Vercel — kalau baru diubah, Redeploy dulu di tab Deployments, lalu coba lagi.";
+    els.loginError.classList.remove("hidden");
+  }
+});
+
 /* ---------- Event panel ---------- */
 document.querySelectorAll("#mediaTabs button").forEach((b) => b.onclick = () => {
   document.querySelectorAll("#mediaTabs button").forEach((x) => x.classList.remove("active"));
@@ -599,13 +614,23 @@ document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.file
 (async function init() {
   for (const h of [...state.history].reverse()) addToGallery(h, false);
   if (!state.history.length) els.empty.classList.remove("hidden");
+  let cfg = null;
   try {
-    const cfg = await api("/api/config");
+    cfg = await api("/api/config");
     state.configured = Boolean(cfg.configured);
-    void cfg;
-  } catch { state.configured = false; }
+  } catch (e) { state.configured = false; }
+  if (cfg && cfg.locked && !cfg.authenticated) {
+    // Terkunci password: tampilkan FORM LOGIN di halaman (bukan popup browser),
+    // supaya password salah langsung ketahuan dan bisa dicoba ulang.
+    els.pill.textContent = "🔒 Terkunci — perlu login"; els.pill.className = "pill pill-warn";
+    els.banner.classList.add("hidden");
+    els.loginCard.classList.remove("hidden");
+    state.models = dedupeModels(FALLBACK_MODELS);
+    finishInit(null); return;
+  }
   if (!state.configured) {
     els.pill.textContent = "⚠ Belum terhubung (mode pratinjau)"; els.pill.className = "pill pill-warn";
+    els.banner.innerHTML = `<strong>Mode Pratinjau.</strong> Server belum terhubung (API key belum diisi). Isi key dulu untuk memuat <em>semua model asli</em> dari akunmu dan mengaktifkan tombol Generate.`;
     els.banner.classList.remove("hidden");
     state.models = dedupeModels(FALLBACK_MODELS);
     finishInit(null); return;

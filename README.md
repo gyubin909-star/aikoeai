@@ -11,7 +11,8 @@ Hasil audit pada akun pemilik (2026-11-25): **194 model gambar + 254 model video
 
 ## Fitur
 
-- **Semua model gambar & video** — tab Gambar/Video dengan jumlah model, estimasi waktu, dan badge model unggulan. Ada pencarian + filter capability yang dinamis (Teks→Video, Gambar→Video, Video→Video, Frame→Video, Upscaler, dst. mengikuti data API).
+- **Semua model gambar, video & chat** — tab Gambar/Video/Chat dengan jumlah model, estimasi waktu, dan badge model unggulan. Ada pencarian + filter capability yang dinamis (Teks→Video, Gambar→Video, Video→Video, Frame→Video, Upscaler, dst. mengikuti data API).
+- **Tab Chat (model teks/asisten)** — 107 model jenis teks: 33 chat murni (Claude, GPT, Gemini, dll. — kategori "Chat (Teks → Teks)"), 33 Gambar→Teks (vision: deskripsikan/analisis gambar referensi), 33 Video→Teks, 8 Audio→Teks (transkrip; butuh URL audio). Jawaban tampil sebagai kartu teks di galeri dengan tombol Salin & Download .txt, tersimpan di riwayat browser. Parameter ekstra per model (mis. `thinking`, `web_search` pada sebagian model Claude) dirender otomatis di panel.
 - **Kontrol video dinamis** — durasi, resolusi, aspek rasio, seed, dan parameter lain dirender dari skema model video terpilih, sama seperti gambar. Parameter bertanda **WAJIB** divalidasi sebelum generate (mis. model Gambar→Video wajib punya referensi).
 - **Panel kontrol dinamis per model** — setiap model punya parameter berbeda, dan UI menampilkannya sesuai skema dari API:
   - *Aspek rasio* → pemilih visual berbentuk kotak rasio (1:1, 16:9, 9:16, 4:3, 3:4, dst. sesuai model)
@@ -66,7 +67,7 @@ Buka http://localhost:3000
 
 ## Deploy online (GitHub → Vercel → domain sendiri)
 
-Project ini sudah siap Vercel (`vercel.json` + `api/index.js`; `server.js` otomatis jalan sebagai serverless function di Vercel dan sebagai server biasa di lokal).
+Project ini siap Vercel dengan mode **server entrypoint**: Vercel menjalankan `server.js` langsung sebagai server Node (terdeteksi otomatis, tanpa `vercel.json` dan tanpa folder `api/` — keduanya justru HARUS tidak ada agar routing `/api/*` tidak tertimpa rewrite). `server.js` yang sama juga jalan sebagai server biasa di lokal.
 
 1. **GitHub** — buat repo baru (mis. `aikoe`), upload semua isi project ini **kecuali `.env`** (file `.env` sudah dikecualikan oleh `.gitignore` — JANGAN pernah upload API key ke GitHub).
 2. **Vercel** — [vercel.com](https://vercel.com) → *Add New… → Project* → import repo `aikoe` → Framework Preset: **Other** (Root Directory: `./`).
