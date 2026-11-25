@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>AIKOE — Generate Gambar & Video</title>
+<meta name="description" content="Generate gambar dan video dengan semua model AI (tanpa duplikat): pilih model, atur rasio, kualitas & durasi, upload referensi sesuai model.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>">
+</head>
+<body>
+<div class="bg" aria-hidden="true"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+
+<header class="topbar glass">
+  <div class="brand">
+    <div class="logo">✦</div>
+    <div>
+      <h1>AIKOE</h1>
+      <p>Generate gambar & video · semua model AI, tanpa kembar</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="connPill" class="pill pill-warn">Memeriksa koneksi…</span>
+    <button id="btnHistory" class="btn btn-ghost" type="button">Riwayat</button>
+  </div>
+</header>
+
+<div id="configBanner" class="banner glass hidden">
+  <strong>Mode Pratinjau.</strong> Server belum terhubung (API key belum diisi di file <code>.env</code>).
+  Daftar model di bawah ini contoh tampilan — isi key dulu untuk memuat <em>semua model asli</em> dari akunmu dan mengaktifkan tombol Generate.
+</div>
+
+<main class="layout">
+  <!-- ============ PANEL KONTROL ============ -->
+  <section class="panel glass" aria-label="Panel kontrol">
+    <div class="field">
+      <label>Jenis Generate</label>
+      <div class="seg media-tabs" id="mediaTabs">
+        <button type="button" data-media="image" class="active">🖼️ Gambar <span id="countImage" class="mini-count"></span></button>
+        <button type="button" data-media="video">🎬 Video <span id="countVideo" class="mini-count"></span></button>
+      </div>
+      <label for="modelSearch" style="margin-top:12px">Model AI <span class="hint" id="dedupeNote"></span></label>
+      <input id="modelSearch" type="search" placeholder="Cari model… mis. flux, nano banana, seedream, kling, veo" autocomplete="off">
+      <div class="chips" id="capFilters" role="tablist"></div>
+      <select id="modelSelect" size="1"></select>
+      <div id="modelMeta" class="model-meta"></div>
+    </div>
+
+    <div class="field">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" rows="4" placeholder="Jelaskan gambar yang kamu mau… mis. foto produk mug keramik di meja kayu, cahaya pagi, sinematik"></textarea>
+      <div class="row-between"><span class="hint">Tips: sebut subjek, gaya, cahaya, dan detail.</span><span id="promptCount" class="hint">0</span></div>
+    </div>
+
+    <div class="field">
+      <div class="row-between">
+        <label>Referensi <span class="hint">(gambar / video, sesuai model)</span></label>
+        <span id="refCount" class="hint">0/0</span>
+      </div>
+      <div id="dropZone" class="dropzone" tabindex="0">
+        <p>📥 Seret & letakkan gambar / video di sini, atau <u>klik untuk memilih</u></p>
+        <p class="hint" id="refLimitInfo">Batas jumlah referensi mengikuti model yang dipilih.</p>
+        <p class="hint">Gambar JPG/PNG/WebP/GIF/AVIF · Video MP4/WebM/MOV · maks 50MB per file · video referensi dipakai model Motion Control & Video→Video · diupload aman lewat server</p>
+        <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic,image/heif,video/mp4,video/webm,video/quicktime" multiple hidden>
+      </div>
+      <div id="refGrid" class="ref-grid"></div>
+      <p id="refWarn" class="warn hidden"></p>
+    </div>
+
+    <div class="field">
+      <div class="row-between"><label>Pengaturan model</label><button id="btnResetParams" type="button" class="btn btn-mini">Reset</button></div>
+      <div id="dynamicParams" class="params"></div>
+      <p id="noParams" class="hint hidden">Model ini tidak punya parameter tambahan.</p>
+    </div>
+
+    <div class="actions">
+      <button id="btnGenerate" type="button" class="btn btn-primary">✨ Generate</button>
+    </div>
+    <p id="statusOut" class="status" role="status"></p>
+  </section>
+
+  <!-- ============ HASIL ============ -->
+  <section class="stage" aria-label="Hasil generate">
+    <div id="runningCard" class="glass result-card hidden">
+      <div class="spinner"></div>
+      <div>
+        <strong>Sedang generate…</strong>
+        <p class="hint"><span id="runModel"></span> · <span id="runElapsed">0 dtk</span> · status: <span id="runStatus">pending</span></p>
+        <p class="hint">Hasil akan muncul otomatis di sini. Jangan tutup tab ini.</p>
+      </div>
+    </div>
+    <div id="emptyState" class="glass result-card empty">
+      <div class="empty-art">🖼️🎬</div>
+      <h2>Belum ada hasil</h2>
+      <p>Pilih jenis <strong>Gambar</strong> atau <strong>Video</strong>, pilih model, tulis prompt, atur rasio / kualitas / durasi di panel, lalu tekan <strong>Generate</strong>. Hasil tersimpan di galeri ini (di browser ini) dan juga di canvas project-mu. Video biasanya butuh beberapa menit.</p>
+    </div>
+    <div id="gallery" class="gallery"></div>
+  </section>
+</main>
+
+<footer class="foot hint">AIKOE · Generate gambar & video dengan model AI pilihanmu.</footer>
+
+<!-- Lightbox -->
+<div id="lightbox" class="lightbox hidden" role="dialog" aria-modal="true">
+  <button class="lb-close" id="lbClose" type="button" aria-label="Tutup">✕</button>
+  <img id="lbImg" alt="Hasil generate ukuran penuh">
+  <video id="lbVideo" controls playsinline class="hidden"></video>
+  <p id="lbCaption" class="lb-caption"></p>
+  <div class="lb-actions">
+    <a id="lbDownload" class="btn btn-primary" href="#">⬇ Download</a>
+    <button id="lbUseRef" class="btn btn-ghost" type="button">Pakai sebagai referensi</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden" role="alert"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

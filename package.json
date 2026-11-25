@@ -1,0 +1,1 @@
+{"description":"Website AI generate gambar & video — semua model, upload referensi sesuai model, panel kontrol dinamis per model.","engines":{"node":">=20"},"name":"aikoe","private":true,"scripts":{"dev":"node --watch server.js","start":"node server.js"},"type":"module","version":"1.0.0"}
