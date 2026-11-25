@@ -25,6 +25,9 @@ const els = {
   countImage: $("#countImage"), countVideo: $("#countVideo"), countText: $("#countText"),
   loginCard: $("#loginCard"), loginForm: $("#loginForm"), loginUser: $("#loginUser"),
   loginPass: $("#loginPass"), loginError: $("#loginError"),
+  chatPanel: $("#chatPanel"), chatLog: $("#chatLog"), chatInput: $("#chatInput"),
+  btnSendChat: $("#btnSendChat"), chatModelName: $("#chatModelName"),
+  promptField: $("#promptField"), refField: $("#refField"),
 };
 
 /* Batas referensi mengikuti MODEL, bukan angka tetap:
@@ -66,8 +69,10 @@ const state = {
   requiredParams: [],       // params non-media yang wajib
   refs: [],
   history: JSON.parse(localStorage.getItem("flora-history") || "[]"),
+  chats: {},
   lbItem: null,
 };
+try { state.chats = JSON.parse(localStorage.getItem("aikoe-chats") || "{}"); } catch { state.chats = {}; }
 
 /* ---------- Mode label dari capabilities ---------- */
 const CAP_LABEL = {
@@ -202,6 +207,7 @@ function selectModel(modelId, fromList = false) {
   const idb = document.createElement("span"); idb.className = "badge"; idb.textContent = m.model_id; els.meta.appendChild(idb);
   buildParams(m);
   renderRefs();
+  applyMode();
 }
 
 /* ---------- Panel kontrol dinamis dari skema params model ---------- */
@@ -591,6 +597,100 @@ els.loginForm?.addEventListener("submit", async (e) => {
     els.loginError.classList.remove("hidden");
   }
 });
+
+/* ---------- Mode CHAT (untuk model teks->teks / asisten) ---------- */
+function isChatModel(m) { return Boolean(m) && m.type === "text" && primaryCap(m) === "text-to-text"; }
+function loadChats() { try { return JSON.parse(localStorage.getItem("aikoe-chats") || "{}"); } catch { return {}; } }
+function saveChats() { localStorage.setItem("aikoe-chats", JSON.stringify(state.chats)); }
+function chatTurns() { return state.model ? (state.chats[state.model.model_id] || []) : []; }
+function applyMode() {
+  const chat = isChatModel(state.model);
+  document.body.classList.toggle("chat-mode", chat);
+  els.chatPanel.classList.toggle("hidden", !chat);
+  if (els.promptField) els.promptField.style.display = chat ? "none" : "";
+  if (els.refField) els.refField.style.display = chat ? "none" : "";
+  const actions = document.querySelector(".actions");
+  if (actions) actions.style.display = chat ? "none" : "";
+  els.status.style.display = chat ? "none" : "";
+  if (chat) {
+    els.empty.classList.add("hidden"); els.running.classList.add("hidden");
+    els.gallery.style.display = "none";
+    els.chatModelName.textContent = `💬 ${state.model.name || state.model.model_id}`;
+    renderChat();
+    setTimeout(() => els.chatInput.focus(), 50);
+  } else {
+    els.gallery.style.display = "";
+    if (!state.history.length) els.empty.classList.remove("hidden");
+  }
+}
+function renderChat() {
+  const turns = chatTurns();
+  els.chatLog.innerHTML = "";
+  if (!turns.length) {
+    const d = document.createElement("div"); d.className = "chat-empty";
+    d.textContent = `Mulai percakapan dengan ${state.model?.name || "asisten"} — tanya apa saja, Enter untuk kirim.`;
+    els.chatLog.appendChild(d);
+    return;
+  }
+  for (const t of turns) {
+    const b = document.createElement("div");
+    b.className = "bubble " + (t.r === "u" ? "user" : "ai") + (t.err ? " err" : "");
+    b.textContent = t.t;
+    els.chatLog.appendChild(b);
+  }
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+function buildChatPrompt(newText) {
+  const turns = chatTurns().filter((t) => !t.err);
+  if (!turns.length) return newText;
+  const lines = turns.slice(-16).map((t) => `${t.r === "u" ? "Pengguna" : "Asisten"}: ${t.t}`);
+  return `Berikut riwayat percakapan antara Pengguna dan Asisten. Lanjutkan percakapan ini: jawab HANYA pesan Pengguna yang paling terakhir, dengan mengingat konteks sebelumnya.\n\n${lines.join("\n")}\nPengguna: ${newText}\nAsisten:`;
+}
+let chatBusy = false;
+async function sendChat() {
+  if (chatBusy) return;
+  if (!state.configured) return toast("Mode pratinjau: hubungkan server dulu untuk chat.");
+  if (!isChatModel(state.model)) return;
+  const text = els.chatInput.value.trim();
+  if (!text) return;
+  const modelId = state.model.model_id;
+  if (!state.chats[modelId]) state.chats[modelId] = [];
+  state.chats[modelId].push({ r: "u", t: text });
+  saveChats(); els.chatInput.value = ""; renderChat();
+  chatBusy = true; els.btnSendChat.disabled = true;
+  const typing = document.createElement("div");
+  typing.className = "bubble ai typing"; typing.innerHTML = "<span></span><span></span><span></span>";
+  els.chatLog.appendChild(typing); els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  try {
+    const { params } = collectParams();
+    const run = await api("/api/generate", { method: "POST", body: JSON.stringify({ type: "text", prompt: buildChatPrompt(text), model: modelId, params }) });
+    const runId = run.run_id || run.id;
+    if (!runId) throw new Error("Server tidak mengembalikan run_id");
+    let result = null;
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000));
+      result = await api(`/api/runs/${encodeURIComponent(runId)}`);
+      if (result.status === "completed" || result.status === "failed") break;
+    }
+    if (!result || result.status === "failed") throw new Error(result?.error_message || "Generate gagal / timeout.");
+    const out = (result.outputs || []).find((o) => o && (o.type === "text" || (o.url && !/^https?:\/\//i.test(o.url))));
+    const answer = out ? (out.url || out.text || "") : "";
+    if (!answer) throw new Error("Model tidak mengembalikan teks jawaban.");
+    state.chats[modelId].push({ r: "a", t: answer });
+  } catch (e) {
+    state.chats[modelId].push({ r: "a", t: `⚠ Gagal: ${e.message}`, err: true });
+  }
+  saveChats(); typing.remove(); renderChat();
+  chatBusy = false; els.btnSendChat.disabled = false; els.chatInput.focus();
+}
+els.btnSendChat.onclick = sendChat;
+els.chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+$("#btnClearChat").onclick = () => {
+  if (!state.model) return;
+  state.chats[state.model.model_id] = []; saveChats(); renderChat();
+  toast("Percakapan baru dimulai ✔");
+};
 
 /* ---------- Event panel ---------- */
 document.querySelectorAll("#mediaTabs button").forEach((b) => b.onclick = () => {

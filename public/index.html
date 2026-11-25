@@ -58,13 +58,13 @@
       <div id="modelMeta" class="model-meta"></div>
     </div>
 
-    <div class="field">
+    <div class="field" id="promptField">
       <label for="prompt">Prompt</label>
       <textarea id="prompt" rows="4" placeholder="Jelaskan gambar yang kamu mau… mis. foto produk mug keramik di meja kayu, cahaya pagi, sinematik"></textarea>
       <div class="row-between"><span class="hint">Tips: sebut subjek, gaya, cahaya, dan detail.</span><span id="promptCount" class="hint">0</span></div>
     </div>
 
-    <div class="field">
+    <div class="field" id="refField">
       <div class="row-between">
         <label>Referensi <span class="hint">(gambar / video, sesuai model)</span></label>
         <span id="refCount" class="hint">0/0</span>
@@ -93,6 +93,18 @@
 
   <!-- ============ HASIL ============ -->
   <section class="stage" aria-label="Hasil generate">
+    <div id="chatPanel" class="glass chat-panel hidden">
+      <div class="chat-head">
+        <strong id="chatModelName">💬 Chat</strong>
+        <button id="btnClearChat" type="button" class="btn btn-mini">🗑️ Percakapan baru</button>
+      </div>
+      <div id="chatLog" class="chat-log"></div>
+      <div class="chat-input-row">
+        <textarea id="chatInput" rows="2" placeholder="Tulis pesan… (Enter = kirim · Shift+Enter = baris baru)"></textarea>
+        <button id="btnSendChat" type="button" class="btn btn-primary">Kirim ➤</button>
+      </div>
+      <p class="hint chat-note">Mode chat: model mengingat konteks percakapan ini (riwayat dikirim sebagai konteks tiap pesan). Ganti model = percakapan terpisah per model.</p>
+    </div>
     <div id="runningCard" class="glass result-card hidden">
       <div class="spinner"></div>
       <div>
