@@ -520,9 +520,32 @@ els.btnGen.onclick = async () => {
 
 /* ---------- Galeri & riwayat ---------- */
 function saveHistory() { localStorage.setItem("flora-history", JSON.stringify(state.history.slice(0, 60))); }
+function syncHistoryBar() { $("#historyBar")?.classList.toggle("hidden", !state.history.length || isChatModel(state.model)); }
+function removeHistoryItem(item, card) {
+  state.history = state.history.filter((h) => !(h.at === item.at && h.url === item.url && h.text === item.text && h.kind === item.kind));
+  saveHistory();
+  card.remove();
+  if (!state.history.length && !isChatModel(state.model)) els.empty.classList.remove("hidden");
+  syncHistoryBar();
+  toast("Hasil dihapus dari riwayat ✔");
+}
+function makeDeleteBtn(item, card) {
+  const del = document.createElement("button"); del.className = "btn btn-ghost btn-del"; del.textContent = "🗑️ Hapus";
+  del.title = "Hapus hasil ini dari riwayat";
+  del.onclick = () => removeHistoryItem(item, card);
+  return del;
+}
+$("#btnClearHistory") && ($("#btnClearHistory").onclick = () => {
+  if (!state.history.length) return;
+  if (!confirm(`Hapus SEMUA riwayat (${state.history.length} hasil) dari browser ini?`)) return;
+  state.history = []; saveHistory(); els.gallery.innerHTML = "";
+  if (!isChatModel(state.model)) els.empty.classList.remove("hidden");
+  syncHistoryBar(); toast("Semua riwayat dihapus ✔");
+});
 function addToGallery(item, save) {
   if (save) { state.history.unshift(item); saveHistory(); }
   els.empty.classList.add("hidden");
+  syncHistoryBar();
   const card = document.createElement("article"); card.className = "card glass";
   let media;
   if (item.kind === "video") {
@@ -545,7 +568,7 @@ function addToGallery(item, save) {
     cp.onclick = async () => { try { await navigator.clipboard.writeText(item.text || ""); toast("Teks tersalin ✔"); } catch { toast("Gagal menyalin teks."); } };
     const dl = document.createElement("a"); dl.className = "btn btn-ghost"; dl.textContent = "⬇ Download .txt";
     dl.href = URL.createObjectURL(new Blob([item.text || ""], { type: "text/plain;charset=utf-8" })); dl.download = `jawaban-${item.at}.txt`;
-    acts.append(cp, dl);
+    acts.append(cp, dl, makeDeleteBtn(item, card));
     body.append(pr, meta, acts); card.append(media, body);
     els.gallery.prepend(card);
     return;
@@ -560,6 +583,7 @@ function addToGallery(item, save) {
     lb.onclick = () => openLightbox(item);
     acts.append(lb);
   }
+  acts.append(makeDeleteBtn(item, card));
   body.append(pr, meta, acts); card.append(media, body);
   els.gallery.prepend(card);
 }
@@ -615,12 +639,14 @@ function applyMode() {
   if (chat) {
     els.empty.classList.add("hidden"); els.running.classList.add("hidden");
     els.gallery.style.display = "none";
+    $("#historyBar")?.classList.add("hidden");
     els.chatModelName.textContent = `💬 ${state.model.name || state.model.model_id}`;
     renderChat();
     setTimeout(() => els.chatInput.focus(), 50);
   } else {
     els.gallery.style.display = "";
     if (!state.history.length) els.empty.classList.remove("hidden");
+    syncHistoryBar();
   }
 }
 function renderChat() {
