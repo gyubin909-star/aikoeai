@@ -7,7 +7,7 @@ Semua model yang tersedia di akun kamu dimuat **live** dari API — tidak ada da
 
 Daftar model digabung dari endpoint model gambar + video, lalu di-**dedupe ketat berdasarkan `model_id`** di server *dan* di frontend: satu `model_id` hanya muncul satu kali.
 Catatan: nama tampil yang sama (mis. "Nano Banana 2.1" muncul 3×) **bukan** duplikat — itu varian mode berbeda (Teks→Gambar / Gambar→Gambar / Multi-Gambar) dengan `model_id` berbeda. UI selalu menampilkan label mode + `model_id` di badge agar tiap entri bisa dibedakan.
-Hasil audit pada akun pemilik (2026-11-25): **194 model gambar + 254 model video = 448 model, 448 ID unik, 0 duplikat, 0 tumpang tindih antar-jenis.**
+Hasil audit pada akun pemilik (2026-11-25): **194 model gambar + 254 model video + 107 model teks = 555 model, 555 ID unik, 0 duplikat, 0 tumpang tindih antar-jenis.**
 
 ## Fitur
 
@@ -63,6 +63,25 @@ Buka http://localhost:3000
 | GET | `/api/runs/:id` | Polling status & output run |
 | GET | `/api/generations` | Riwayat generate di workspace |
 | GET | `/api/download?url=` | Download hasil sebagai lampiran |
+
+## Deploy online (GitHub → Vercel → domain sendiri)
+
+Project ini sudah siap Vercel (`vercel.json` + `api/index.js`; `server.js` otomatis jalan sebagai serverless function di Vercel dan sebagai server biasa di lokal).
+
+1. **GitHub** — buat repo baru (mis. `aikoe`), upload semua isi project ini **kecuali `.env`** (file `.env` sudah dikecualikan oleh `.gitignore` — JANGAN pernah upload API key ke GitHub).
+2. **Vercel** — [vercel.com](https://vercel.com) → *Add New… → Project* → import repo `aikoe` → Framework Preset: **Other** (Root Directory: `./`).
+3. **Environment Variables** (di halaman import / Settings → Environment Variables), isi:
+   - `FLORA_API_KEY` — key kamu
+   - `FLORA_WORKSPACE_ID` — workspace kamu
+   - `SITE_PASSWORD` — **sangat disarankan**: password kunci website (username selalu `aikoe`). Tanpa ini, siapa pun yang tahu URL bisa generate memakai kuota akunmu.
+4. **Deploy** → website online di `https://aikoe-xxxx.vercel.app`.
+5. **Domain sendiri** — di Vercel: *Settings → Domains → Add* → ketik domainmu → Vercel menampilkan DNS yang harus dipasang di tempat kamu membeli domain:
+   - Domain utama (apex, mis. `contoh.com`): **A record** `@` → `76.76.21.21`
+   - Subdomain (mis. `www` / `ai`): **CNAME** → `cname.vercel-dns.com`
+   - Kalau DNS dikelola Cloudflare: matikan proxy (awan abu-abu / *DNS only*) untuk record tersebut.
+   - Tunggu status domain di Vercel jadi **Valid** (HTTPS otomatis aktif; propagasi DNS bisa 5 menit – beberapa jam).
+
+Batasan versi online (Vercel Hobby): satu request maks ±4,5MB, jadi upload referensi berukuran besar (terutama video panjang) bisa gagal — gambar referensi ukuran wajar aman. Generate & polling berjalan normal.
 
 ## Catatan
 

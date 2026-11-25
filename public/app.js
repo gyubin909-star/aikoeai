@@ -22,7 +22,7 @@ const els = {
   lb: $("#lightbox"), lbImg: $("#lbImg"), lbVideo: $("#lbVideo"), lbCap: $("#lbCaption"),
   lbDl: $("#lbDownload"), toast: $("#toast"),
   capFilters: $("#capFilters"), dedupeNote: $("#dedupeNote"),
-  countImage: $("#countImage"), countVideo: $("#countVideo"),
+  countImage: $("#countImage"), countVideo: $("#countVideo"), countText: $("#countText"),
 };
 
 /* Batas referensi mengikuti MODEL, bukan angka tetap:
@@ -73,11 +73,12 @@ const CAP_LABEL = {
   "inpainting": "Inpainting", "outpainting": "Outpainting", "image-upscaler": "Upscaler Gambar",
   "text-to-video": "Teks → Video", "image-to-video": "Gambar → Video", "images-to-video": "Multi-Gambar → Video",
   "video-to-video": "Video → Video", "frames-to-video": "Frame → Video", "first-last-frame-to-video": "Frame Awal-Akhir → Video",
-  "mixed-to-video": "Campuran → Video", "audio-to-video": "Audio → Video", "audio-image-to-video": "Audio+Gambar → Video",
+  "mixed-to-video": "Gabungan / Motion → Video", "audio-to-video": "Audio → Video", "audio-image-to-video": "Audio+Gambar → Video",
   "audio-video-to-video": "Audio+Video → Video", "video-upscaler": "Upscaler Video", "reference-to-video": "Referensi → Video",
+  "text-to-text": "Chat (Teks → Teks)", "image-to-text": "Gambar → Teks", "video-to-text": "Video → Teks", "audio-to-text": "Audio → Teks (Transkrip)",
 };
 const capLabel = (c) => CAP_LABEL[c] || c.replace(/-/g, " ").replace(/\b\w/g, (x) => x.toUpperCase());
-const primaryCap = (m) => (m.capabilities || [])[0] || (m.type === "video" ? "text-to-video" : "text-to-image");
+const primaryCap = (m) => (m.capabilities || [])[0] || (m.type === "video" ? "text-to-video" : m.type === "text" ? "text-to-text" : "text-to-image");
 
 /* ---------- Model contoh untuk Mode Pratinjau ---------- */
 const GEN_IMG = [
@@ -97,6 +98,7 @@ const FALLBACK_MODELS = [
   { model_id: "i2i-elote-gateway", name: "Nano Banana 2.1 (pratinjau)", type: "image", capabilities: ["image-to-image"], estimated_cost_usd: 0.03, estimated_seconds: 25, params: [...GEN_IMG, { name: "image_url", type: "string", required: true }] },
   { model_id: "t2v-kling-v4-gateway", name: "Kling v4 (pratinjau)", type: "video", capabilities: ["text-to-video"], estimated_cost_usd: 0.3, estimated_seconds: 120, params: GEN_VID },
   { model_id: "i2v-kling-v4-gateway", name: "Kling v4 (pratinjau)", type: "video", capabilities: ["image-to-video"], estimated_cost_usd: 0.35, estimated_seconds: 150, params: [...GEN_VID, { name: "image_url", type: "string", required: true }] },
+  { model_id: "t2t-openai-gpt4o-mini", name: "GPT 4o Mini (pratinjau)", type: "text", capabilities: ["text-to-text"], estimated_seconds: 15, params: [] },
 ];
 
 /* ---------- Util ---------- */
@@ -375,14 +377,30 @@ async function addFiles(files) {
     state.refs.push(ref); renderRefs();
     try {
       if (!state.configured) { ref.status = "error"; renderRefs(); continue; }
-      const b64 = await new Promise((resolve, reject) => {
-        const rd = new FileReader();
-        rd.onload = () => resolve(String(rd.result).split(",")[1]);
-        rd.onerror = reject; rd.readAsDataURL(f);
-      });
-      const out = await api("/api/upload", { method: "POST", body: JSON.stringify({ name: f.name, content_type: f.type || "image/png", data_base64: b64 }) });
-      if (!out.url) throw new Error("Server tidak mengembalikan URL asset");
-      ref.assetUrl = out.url; ref.status = "ready";
+      // Jalur utama: upload LANGSUNG dari browser ke storage (file tidak melewati
+      // server/Vercel, jadi tidak kena batas body 4,5MB dan tidak mengembang base64).
+      try {
+        const init = await api("/api/upload-init", { method: "POST", body: JSON.stringify({ name: f.name, content_type: f.type || "image/png" }) });
+        const fd = new FormData();
+        for (const [k, v] of Object.entries(init.upload.form_fields || {})) fd.append(k, v);
+        fd.append(init.upload.file_field || "file", f);
+        const up = await fetch(init.upload.url, { method: init.upload.method || "POST", body: fd });
+        if (!up.ok) throw new Error(`storage menolak (${up.status})`);
+        const done = await api("/api/upload-complete", { method: "POST", body: JSON.stringify({ asset_id: init.asset_id }) });
+        ref.assetUrl = done.url || init.url;
+        if (!ref.assetUrl) throw new Error("Server tidak mengembalikan URL asset");
+      } catch (directErr) {
+        // Fallback jalur lama (base64 lewat server) — hanya efektif untuk file kecil.
+        const b64 = await new Promise((resolve, reject) => {
+          const rd = new FileReader();
+          rd.onload = () => resolve(String(rd.result).split(",")[1]);
+          rd.onerror = reject; rd.readAsDataURL(f);
+        });
+        const out = await api("/api/upload", { method: "POST", body: JSON.stringify({ name: f.name, content_type: f.type || "image/png", data_base64: b64 }) });
+        if (!out.url) throw new Error("Server tidak mengembalikan URL asset");
+        ref.assetUrl = out.url;
+      }
+      ref.status = "ready";
     } catch (e) { ref.status = "error"; toast(`Upload "${f.name}" gagal: ${e.message}`); }
     renderRefs();
   }
@@ -451,7 +469,7 @@ els.btnGen.onclick = async () => {
       // Error validasi lain diabaikan: generate akan menampilkan error aslinya.
     }
   }
-  const kind = state.model.type === "video" ? "video" : "image";
+  const kind = state.model.type || "image";
   els.btnGen.disabled = true; setStatus("Mengirim request…");
   els.running.classList.remove("hidden"); els.empty.classList.add("hidden");
   els.runModel.textContent = state.model.name || state.model.model_id;
@@ -471,10 +489,16 @@ els.btnGen.onclick = async () => {
       if (result.status === "completed" || result.status === "failed") break;
     }
     if (!result || result.status === "failed") throw new Error(result?.error_message || "Generate gagal / timeout.");
-    const urls = (result.outputs || []).map((o) => o.url).filter(Boolean);
-    if (!urls.length) throw new Error("Run selesai tapi tidak ada output.");
-    for (const u of urls) addToGallery({ url: u, kind, prompt: els.prompt.value.trim(), model: state.model.name || state.model.model_id, at: Date.now() }, true);
-    setStatus(`Selesai ✔ ${urls.length} ${kind === "video" ? "video" : "gambar"} dibuat dalam ${Math.floor((Date.now() - t0) / 1000)} detik.`);
+    const outs = (result.outputs || []).filter((o) => o && (o.url || o.text));
+    if (!outs.length) throw new Error("Run selesai tapi tidak ada output.");
+    let made = 0;
+    for (const o of outs) {
+      const isText = o.type === "text" || !/^https?:\/\//i.test(o.url || "");
+      if (isText) addToGallery({ kind: "text", text: o.url || o.text || "", prompt: els.prompt.value.trim(), model: state.model.name || state.model.model_id, at: Date.now() }, true);
+      else addToGallery({ url: o.url, kind, prompt: els.prompt.value.trim(), model: state.model.name || state.model.model_id, at: Date.now() }, true);
+      made++;
+    }
+    setStatus(`Selesai ✔ ${made} ${kind === "video" ? "video" : kind === "text" ? "jawaban teks" : "gambar"} dibuat dalam ${Math.floor((Date.now() - t0) / 1000)} detik.`);
   } catch (e) {
     const n = parseLimitFromError(e.message);
     if (n && state.model) { learnLimit(state.model.model_id, n, /video/i.test(e.message) ? "video" : "image"); renderRefs(); setStatus(`Batas referensi model ini ${n} — sudah dipelajari & diterapkan. Tekan Generate lagi.`, true); }
@@ -495,6 +519,8 @@ function addToGallery(item, save) {
   let media;
   if (item.kind === "video") {
     media = document.createElement("video"); media.src = item.url; media.controls = true; media.preload = "metadata"; media.playsInline = true;
+  } else if (item.kind === "text") {
+    media = document.createElement("div"); media.className = "text-result"; media.textContent = item.text || "";
   } else {
     media = document.createElement("img"); media.src = item.url; media.alt = item.prompt; media.loading = "lazy";
     media.onclick = () => openLightbox(item);
@@ -502,10 +528,20 @@ function addToGallery(item, save) {
   const body = document.createElement("div"); body.className = "c-body";
   const pr = document.createElement("p"); pr.className = "c-prompt"; pr.textContent = item.prompt;
   const meta = document.createElement("div"); meta.className = "c-meta";
-  const mb = document.createElement("span"); mb.className = "badge"; mb.textContent = (item.kind === "video" ? "🎬 " : "🖼️ ") + item.model;
+  const mb = document.createElement("span"); mb.className = "badge"; mb.textContent = (item.kind === "video" ? "🎬 " : item.kind === "text" ? "💬 " : "🖼️ ") + item.model;
   const tm = document.createElement("span"); tm.className = "hint"; tm.textContent = new Date(item.at).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   meta.append(mb, tm);
   const acts = document.createElement("div"); acts.className = "c-actions";
+  if (item.kind === "text") {
+    const cp = document.createElement("button"); cp.className = "btn btn-primary"; cp.textContent = "📋 Salin teks";
+    cp.onclick = async () => { try { await navigator.clipboard.writeText(item.text || ""); toast("Teks tersalin ✔"); } catch { toast("Gagal menyalin teks."); } };
+    const dl = document.createElement("a"); dl.className = "btn btn-ghost"; dl.textContent = "⬇ Download .txt";
+    dl.href = URL.createObjectURL(new Blob([item.text || ""], { type: "text/plain;charset=utf-8" })); dl.download = `jawaban-${item.at}.txt`;
+    acts.append(cp, dl);
+    body.append(pr, meta, acts); card.append(media, body);
+    els.gallery.prepend(card);
+    return;
+  }
   const dl = document.createElement("a"); dl.className = "btn btn-primary"; dl.textContent = "⬇ Download"; dl.href = `/api/download?url=${encodeURIComponent(item.url)}`;
   acts.append(dl);
   if (item.kind !== "video") {
@@ -593,7 +629,8 @@ document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.file
 function finishInit(counts) {
   const ci = state.models.filter((m) => m.type === "image").length;
   const cv = state.models.filter((m) => m.type === "video").length;
-  els.countImage.textContent = ci; els.countVideo.textContent = cv;
-  els.dedupeNote.textContent = `(${ci + cv} model unik, dedupe by model_id)`;
+  const ct = state.models.filter((m) => m.type === "text").length;
+  els.countImage.textContent = ci; els.countVideo.textContent = cv; if (els.countText) els.countText.textContent = ct;
+  els.dedupeNote.textContent = `(${ci + cv + ct} model unik, dedupe by model_id)`;
   buildCapChips(); renderModelList();
 }

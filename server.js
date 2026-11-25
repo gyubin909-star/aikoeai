@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
-const DATA_DIR = join(ROOT, "data");
+const DATA_DIR = process.env.VERCEL ? "/tmp/aikoe-data" : join(ROOT, "data"); // di Vercel filesystem project read-only; cache project cukup di /tmp
 const FLORA_BASE = "https://app.flora.ai/api/v1";
 
 // ---------- .env loader (tanpa dependensi) ----------
@@ -109,8 +109,10 @@ async function getProjectId() {
     cachedProjectId = created.project_id || created.project?.project_id;
   }
   if (!cachedProjectId) throw Object.assign(new Error("Gagal menyiapkan project."), { status: 502 });
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(cacheFile, JSON.stringify({ workspace_id: ws, project_id: cachedProjectId }, null, 2));
+  try { // cache file bersifat opsional — kegagalan tulis (mis. serverless) tidak boleh menggagalkan generate
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(cacheFile, JSON.stringify({ workspace_id: ws, project_id: cachedProjectId }, null, 2));
+  } catch { /* abaikan */ }
   return cachedProjectId;
 }
 
@@ -120,16 +122,16 @@ async function getProjectId() {
 let modelCache = { at: 0, data: null };
 async function getModels() {
   if (modelCache.data && Date.now() - modelCache.at < 5 * 60 * 1000) return modelCache.data;
-  const [img, vid] = await Promise.all([flora("/models?type=image"), flora("/models?type=video")]);
+  const [img, vid, txt] = await Promise.all([flora("/models?type=image"), flora("/models?type=video"), flora("/models?type=text")]);
   const byId = new Map();
-  for (const [type, data] of [["image", img], ["video", vid]]) {
+  for (const [type, data] of [["image", img], ["video", vid], ["text", txt]]) {
     for (const m of data?.models || []) {
       if (!m.model_id || byId.has(m.model_id)) continue; // anti-kembar
       byId.set(m.model_id, { ...m, type });
     }
   }
   const featById = new Map();
-  for (const data of [img, vid]) for (const f of data?.featured || []) if (f.model_id && !featById.has(f.model_id)) featById.set(f.model_id, f);
+  for (const data of [img, vid, txt]) for (const f of data?.featured || []) if (f.model_id && !featById.has(f.model_id)) featById.set(f.model_id, f);
   const models = [...byId.values()];
   const out = {
     models,
@@ -137,6 +139,7 @@ async function getModels() {
     counts: {
       image: models.filter((m) => m.type === "image").length,
       video: models.filter((m) => m.type === "video").length,
+      text: models.filter((m) => m.type === "text").length,
       total: models.length,
     },
   };
@@ -177,10 +180,18 @@ async function uploadAsset({ name, contentType, buffer }) {
 // ---------- HTTP server ----------
 const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json" };
 
-const server = createServer(async (req, res) => {
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+const handler = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
   try {
+    // Kunci password opsional (Basic Auth) — aktif hanya bila SITE_PASSWORD diisi.
+    // Penting untuk versi online: tanpa ini, siapa pun yang tahu URL bisa generate memakai kuota akunmu.
+    if (SITE_PASSWORD) {
+      const auth = req.headers.authorization || "";
+      const ok = auth.startsWith("Basic ") && Buffer.from(auth.slice(6), "base64").toString() === `aikoe:${SITE_PASSWORD}`;
+      if (!ok) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="AIKOE"', "Content-Type": "text/plain; charset=utf-8" }); return res.end("Perlu login. Username: aikoe, password: sesuai SITE_PASSWORD."); }
+    }
     if (p === "/api/config") {
       return sendJson(res, 200, { configured, workspace_configured: Boolean(ENV_WORKSPACE), base: FLORA_BASE });
     }
@@ -213,6 +224,25 @@ const server = createServer(async (req, res) => {
       const data = await flora("/workspaces");
       return sendJson(res, 200, data);
     }
+    if (p === "/api/upload-init" && req.method === "POST") {
+      // Upload LANGSUNG browser -> storage (signed POST): file TIDAK melewati server ini,
+      // jadi lolos dari batas body 4,5MB milik Vercel. Server hanya memesan slot upload.
+      const { name, content_type } = await readJson(req);
+      if (!name) throw Object.assign(new Error("name wajib ada"), { status: 400 });
+      const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif", "video/mp4", "video/webm", "video/quicktime"];
+      const ct = content_type || "image/png";
+      if (!allowed.includes(ct)) throw Object.assign(new Error(`Tipe file tidak didukung: ${ct}`), { status: 400 });
+      const ws = await getWorkspaceId();
+      const reserve = await flora("/assets", { method: "POST", body: { source: "signed-url", workspace_id: ws, file_name: name, content_type: ct } });
+      if (!reserve.upload?.url) throw Object.assign(new Error("Server tidak mengembalikan instruksi signed upload."), { status: 502 });
+      return sendJson(res, 200, { asset_id: reserve.asset_id, url: reserve.url, upload: reserve.upload });
+    }
+    if (p === "/api/upload-complete" && req.method === "POST") {
+      const { asset_id } = await readJson(req);
+      if (!asset_id) throw Object.assign(new Error("asset_id wajib ada"), { status: 400 });
+      const done = await flora(`/assets/${encodeURIComponent(asset_id)}/complete`, { method: "POST" });
+      return sendJson(res, 200, { asset_id, url: done.url || done.asset?.url, status: done.status || done.asset?.status || "ready" });
+    }
     if (p === "/api/upload" && req.method === "POST") {
       const { name, content_type, data_base64 } = await readJson(req);
       if (!name || !data_base64) throw Object.assign(new Error("name dan data_base64 wajib ada"), { status: 400 });
@@ -231,7 +261,7 @@ const server = createServer(async (req, res) => {
       const workspace_id = await getWorkspaceId();
       const project_id = await getProjectId();
       const payload = {
-        type: input.type === "video" ? "video" : "image",
+        type: ["image", "video", "text", "audio", "model3d"].includes(input.type) ? input.type : "image",
         prompt: input.prompt,
         workspace_id,
         project_id,
@@ -278,9 +308,15 @@ const server = createServer(async (req, res) => {
   } catch (err) {
     sendJson(res, err.status || 500, { error: { message: err.message, code: err.code || "server_error", flora: err.flora || undefined } });
   }
-});
+};
 
-server.listen(PORT, () => {
-  console.log(`AIKOE jalan di http://localhost:${PORT}`);
-  console.log(configured ? "API key: terbaca ✔" : "API key: BELUM diisi — salin .env.example menjadi .env lalu isi key-nya.");
-});
+// Mode Vercel (serverless): handler diekspor, tidak listen port.
+// Mode lokal: jalan sebagai server biasa.
+export default handler;
+if (!process.env.VERCEL) {
+  createServer(handler).listen(PORT, () => {
+    console.log(`AIKOE jalan di http://localhost:${PORT}`);
+    console.log(configured ? "API key: terbaca ✔" : "API key: BELUM diisi — salin .env.example menjadi .env lalu isi key-nya.");
+    if (SITE_PASSWORD) console.log("Kunci password: AKTIF (username: aikoe)");
+  });
+}
